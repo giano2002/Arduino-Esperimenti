@@ -1,0 +1,436 @@
+#include <BME280I2C.h>
+#include <MCUFRIEND_kbv.h>
+#include <RTClib.h>
+#include <TimedAction.h>
+#include <SPI.h>
+#include <SD.h>
+#include <Wire.h>
+#include "DST_RTC.h"
+
+RTC_DS1307 rtc;
+
+DST_RTC dst_rtc;
+
+// è necessario indicare quale zona DST si vuole utilizzare (Europa o USA), togliendo il commento ad una delle due righe qui sotto.
+const char rulesDST[] = "EU";  // Europa
+//const char rulesDST[] = "US"; // USA
+const float adjustment = 5;  // per calibrare il valore della umidità.
+
+MCUFRIEND_kbv tft;
+BME280I2C bme;
+File myFile;
+
+char daysOfTheWeek[7][12] = { "Domenica", " Lunedi", " Martedi", "Mercoledi", " Giovedi", " Venerdi", " Sabato" };
+char month[12][12] = { "Dic", "Gen", "Feb", "Mar", "Apr", "Mag", "Giu", "Lug", "Ago", "Set", "Ott", "Nov" };
+uint16_t ID, currentcolor;
+uint8_t Orientation = 1;  //Orientamento display
+
+float tmin = 100;
+float tmax = -100;
+float umin = 100;
+float umax = 0;
+float pmin = 2000;
+float pmax = 0;
+float temp, hum, pres;
+float hum1;
+float pres1;
+float altitudepws = 29.60;  // altitudine s.l.m. di casa = 29 m. - Modificare il valore per altitudini diverse!
+
+String data = "";
+
+////////////// Assegnare un nome al codice dei colori ////////////////////////////
+#define BLACK 0x0000
+#define BLUE 0x001F
+#define RED 0xF800
+#define GREEN 0x07E0
+#define CYAN 0x07FF
+#define MAGENTA 0xF81F
+#define YELLOW 0xFFE0
+#define WHITE 0xFFFF
+#define ORANGE 0xFDA0
+#define NAVY 0x000F
+#define GREENYELLOW 0xB7E0
+#define OLIVE 0x7BE0
+#define LIGHTGREY 0xC618
+#define DARKGREY 0x7BEF
+#define PINK 0xFC9F
+#define PURPLE 0x780F
+
+////////////////////// Refresh del display //////////////////////////
+void (*resetFunc)(void) = 0;  // dichiarare la funzione di reset all'indirizzo 0.
+
+void tftrefresh();
+TimedAction timedAction = TimedAction(240000, tftrefresh);  // Intervallo di 240 secondi per il refresh del display.
+// Questo tempo può essere modificato.
+
+/////////////////////////////////////////////////////////////
+void setup() {
+  Serial.begin(9600);
+  pinMode(3, OUTPUT);  // PIN D3 come uscita
+  pinMode(2, INPUT);   // PIN D2 come input
+  digitalWrite(3, HIGH);
+  Wire.begin();
+  bme.begin();
+  while (!Serial)
+    ;
+  {
+    delay(100);
+  }
+  Serial.println("BME280 test!");
+
+  if (!bme.begin()) {
+    Serial.print("Non trovo il sensore BME!");
+    while (true)
+      ;
+  }
+  if (!rtc.begin()) {
+
+    Serial.println("Non trovo RTC");
+    while (1)
+      ;
+  }
+  if (!rtc.isrunning()) {
+    Serial.println("RTC non sta funzionando!");
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    // DST? Se non in DST, sottrae un'ora dall'ora RTC
+
+    DateTime standardTime = rtc.now();
+    if (dst_rtc.checkDST(standardTime) == true) {  // Controlla se siamo oppuro no in DST.
+      standardTime = standardTime.unixtime() - 3600;
+    }
+    rtc.adjust(standardTime);
+  }
+  ////////////////////////////////////////////////////////////////////////////
+  // rtc.adjust(DateTime(2023, 6, 6, 13, 50, 30)); ///////////////////// RIGA DA MODIFICARE PER CAMBIARE DATA E ORA
+  ////////////////////////////////////////////////////////////////////////////
+  //  Per modificare data e ora, occorre agire sulla riga 170, qui sopra, utilizzando il seguente formato: Anno (4 cifre),
+  //  mese, giorno, ora, minuti, secondi. Attenzione! Occorre inserire sempre l'ora solare standard (anche se si
+  //  è nel periodo di Ora legale). Fatte le modifiche, togliere il commento e caricare lo sketch. Dopo di che, rimettere il
+  //  commento e ricaricare di nuovo lo sketch!!
+
+  uint16_t tmp;
+  tft.reset();
+  ID = tft.readID();
+  tft.begin(ID);
+  tft.setRotation(Orientation);
+  tft.fillScreen(NAVY);
+  uint16_t ID = tft.readID();
+
+  //////////// Inizializzare la scheda micro SD ////////////////////
+  Serial.print("Sto inizializzando la micro SD...");
+  if (!SD.begin(4)) {
+    Serial.println("inizializzazione fallita!");
+    tft.setCursor(10, 7);
+    tft.setTextColor(RED, NAVY);
+    tft.setTextSize(2);
+    tft.print("SD!");
+    while (1)
+      ;
+  }
+  Serial.println("inizializzazione riuscita.");
+  tft.setCursor(10, 7);
+  tft.setTextColor(WHITE, NAVY);
+  tft.setTextSize(2);
+  tft.print("SD");  // Visualizza "SD" sul display, in alto a sinistra
+}
+
+/////////////////////////////////////////////////////////////////////////
+void loop() {
+  DateTime standardTime = rtc.now();
+  Serial.println("Standard Time");
+  printTheTime(standardTime);
+  DateTime theTime = dst_rtc.calculateTime(standardTime);  // Considera DST
+  Serial.println("time adjusted for Daylight Saving Time");
+  printTheTime(theTime);
+  delay(1000);
+
+  //DateTime now = rtc.now();
+  DateTime now = theTime;  // per visualizzare l'ora legale/solare
+  bme.read(pres, temp, hum);
+  hum1 = hum + adjustment;                                 // per calibrare i valori di umidità
+  pres1 = (pres / pow(1 - (altitudepws / 44330), 5.255));  // Formula per convertire da pressionee relativa a pressione slm.
+
+  //////////////// Calcolo Indice di calore /////////////////////////////
+  float heat_index = calculateHeatIndex(temp, hum1);  //
+
+  /////////////// Disegnare 1 cerchio e, al suo interno, la iniziale del mio nome. Inoltre, mese e data dello sketch //////
+  for (int i = 15; i > 3; i -= 3) {
+    tft.drawCircle(50, 38, i, ORANGE);
+    tft.setCursor(48, 35);
+    tft.setTextSize(1);
+    tft.setTextColor(WHITE, NAVY);
+    tft.print("P");
+    tft.setTextColor(OLIVE, NAVY);
+    tft.setCursor(8, 38);
+    tft.print("0");
+    tft.setCursor(20, 46);
+    tft.print("2");
+    tft.setCursor(8, 46);
+    tft.print("2");
+    tft.setCursor(14, 46);
+    tft.print("0");
+    tft.setCursor(26, 46);
+    tft.print("3");
+    delay(10);
+  }
+
+  //////////////Disegnare le linee dei riquadri ////////////////////////////////////
+  tft.drawLine(0, 203, 400, 203, WHITE);    // riga inferiore orizzontale
+  tft.drawLine(198, 100, 198, 203, WHITE);  // riga centrale verticale
+  tft.drawLine(0, 100, 400, 100, WHITE);    // riga superiore orizzontale
+  tft.drawLine(0, 235, 400, 235, YELLOW);   // riga inferiore orizzontale di chiusura
+  tft.drawLine(258, 2, 390, 2, YELLOW);     // riga superiore orizzontale riquadro
+  tft.drawLine(258, 2, 258, 62, YELLOW);    // riga verticale sinistra riquadro
+  tft.drawLine(258, 62, 390, 62, YELLOW);   // riga inferiore orizzontale riquadro
+  tft.drawLine(390, 2, 390, 62, YELLOW);    // riga verticale destra riquadro
+  tft.drawLine(127, 203, 127, 235, WHITE);  // riga verticale corta inferiore 1
+  tft.drawLine(262, 203, 262, 235, WHITE);  // riga verticale corta inferiore 2
+
+  //////////////////// Scrivere "Ore" e "Minuti" /////////////////////////////////////
+  tft.setTextColor(WHITE, NAVY);
+  tft.setCursor(100, 0);
+  tft.setTextSize(1);
+  tft.print("Ore");
+  tft.setCursor(195, 0);
+  tft.print("Minuti");
+  tft.setTextColor(WHITE, NAVY);
+  tft.setTextSize(6);
+  tft.setCursor(70, 18);
+  if (now.hour() <= 9) {  // Aggiungere spazio vuoto iniziale all'ora, se è inferiore alle ore 10.
+    tft.print(" ");
+    tft.print(now.hour(), DEC);
+  } else {
+    tft.print(now.hour(), DEC);
+  }
+
+  ///////////////////// separatore tra ore e minuti (:) //////////////
+  tft.setCursor(140, 18);
+  tft.print(":");
+
+  ///////////////// Aggiungere lo 0 iniziale ai minuti, se inferiori a 10 ///////////////
+  tft.setTextColor(WHITE, NAVY);
+  tft.setTextSize(6);
+  tft.setCursor(176, 18);
+  if (now.minute() <= 9) {
+    tft.print("0");
+    tft.print(now.minute(), DEC);
+  } else {
+    tft.print(now.minute(), DEC);
+  }
+  Serial.print(now.second());
+
+  ///////////////////// Scrivere la data ///////////////////////////////////
+  tft.reset();
+  tft.setCursor(9, 70);  // 9 = distanza dal bordo sinistro; 70 = distanza dal bordo superiore del display.
+  tft.setTextSize(3);
+  tft.setTextColor(GREEN, NAVY);
+  tft.print(String(daysOfTheWeek[now.dayOfTheWeek()]));
+  tft.print(" ");
+  tft.print(now.day(), DEC);
+  tft.print(" ");
+  tft.print(String(month[now.month()]));
+  tft.print(" ");
+  tft.print(now.year(), DEC);
+
+  ///////////// Visualizzare i valori di temperatura e Umidità sul display ////////////
+  tft.setTextColor(PINK, NAVY);
+  tft.setTextSize(2);
+  tft.setCursor(20, 105);
+  tft.print("Temperatura");
+  tft.print(" C");
+  tft.setCursor(250, 105);
+  tft.setTextColor(CYAN, NAVY);
+  tft.print("Umidita R.");
+  tft.setTextSize(5);
+  tft.setCursor(30, 132);
+  tft.setTextColor(YELLOW, NAVY);
+  tft.print(data = String(temp, 1));
+  tft.setTextSize(1);
+  tft.print(" O");
+  tft.setTextSize(5);
+  tft.setTextColor(CYAN, NAVY);
+  tft.setCursor(235, 132);
+  tft.print(data = String(hum1, 1));
+  tft.setTextSize(3);
+  tft.setCursor(353, 137);
+  tft.print(" %");
+
+  //////////////////// Visualizza l'Indice di calore (Heat index) nel riquadro in alto a destra ///
+  //////////////////// se Temp >= 26 e Hum>= 40% /////////////////////////
+  tft.setCursor(274, 6);
+  tft.setTextSize(1);
+  tft.setTextColor(WHITE, NAVY);
+  tft.print("Indice di calore");
+  tft.setTextColor(RED, NAVY);
+  if ((temp >= 27) && (hum1 >= 40)) {
+    tft.setCursor(266, 22);
+    tft.setTextSize(5);
+    tft.print(heat_index, 1);
+  } else {
+    tft.setCursor(266, 22);
+    tft.setTextSize(5);
+    tft.print("    ");
+  }
+
+  //////////////// Rilevare i valori Min e Max e visualizzarli /////////////////
+  if (temp < tmin) {
+    tmin = temp;
+  }
+  if (temp > tmax) {
+    tmax = temp;
+  }
+  if (hum1 < umin) {
+    umin = hum1;
+  }
+  if (hum1 > umax) {
+    umax = hum1;
+  }
+  if (pres1 < pmin) {
+    pmin = pres1;
+  }
+  if (pres1 > pmax) {
+    pmax = pres1;
+  }
+  tft.setCursor(0, 182);
+  tft.setTextColor(WHITE, NAVY);
+  tft.setTextSize(2);
+  tft.print("Min ");
+  tft.print(data = String(tmin, 1));
+  tft.setCursor(100, 182);
+  tft.setTextColor(RED, NAVY);
+  tft.print("Max ");
+  tft.print(data = String(tmax, 1));
+  tft.setCursor(202, 182);
+  tft.setTextColor(WHITE, NAVY);
+  tft.setTextSize(2);
+  tft.print("Min ");
+  tft.print(data = String(umin, 1));
+  tft.setCursor(302, 182);
+  tft.setTextColor(RED, NAVY);
+  tft.print("Max ");
+  tft.print(data = String(umax, 1));
+
+  ///////////////////// Visualizzare i valori di Pressione ///////////////////////
+  tft.setTextSize(2);
+  tft.setCursor(5, 213);
+  tft.setTextColor(GREEN, NAVY);
+  tft.print(data = String(pres1, 1));
+  tft.print(" hpa");
+  tft.setTextColor(WHITE, NAVY);
+  tft.setCursor(135, 213);
+  tft.print("Min ");
+  tft.print(data = String(pmin, 1));
+  tft.setCursor(271, 213);
+  tft.setTextColor(RED, NAVY);
+  tft.print("Max ");
+  tft.print(data = String(pmax, 1));
+
+  //////////////////// Scrivere su micro SD tutti i valori Min, MAx e la data, ogni mezzanotte ///////
+  // Ho dovuto inserire <now.second() ==1 || now.swcond() ==2> per tener conto che il conteggio dei secondi è irregolare.
+
+  if ((now.hour() == 23) && (now.minute() == 59) && (now.second() == 1 || (now.second() == 2))) {
+    myFile = SD.open("test.txt", FILE_WRITE);
+    // se il file si apre...
+    if (myFile) {
+      Serial.print("Scrivo su test.txt...");
+      myFile.println(now.day(), DEC);
+      myFile.println(String(month[now.month()]));
+      myFile.println(now.year(), DEC);
+      myFile.println(data = String(tmin, 1) + " T min");
+      myFile.println(data = String(tmax, 1) + " T max");
+      myFile.println(data = String(umin, 1) + " U min");
+      myFile.println(data = String(umax, 1) + " U max");
+      myFile.println(data = String(pmin, 1) + " P min");
+      myFile.println(data = String(pmax, 1) + " P max");
+      // chiudere il file:
+      myFile.close();
+      Serial.println("Fatto!.");
+      tft.setCursor(10, 7);
+      tft.setTextColor(WHITE, NAVY);
+      tft.setTextSize(2);
+      tft.print("Mem");  // Visualizzare sul display che la scrittura su SD è stata effettuata.
+
+    } else {
+      // Se il file non si apre, scrivere "errore":
+      Serial.println("Errore di apertura del test.txt");
+      tft.setCursor(10, 7);
+      tft.setTextColor(RED, NAVY);
+      tft.setTextSize(2);
+      tft.print("No mem!");  // Visualizzare sul display che la scrittura su SD non è stata effettuata.
+    }
+  }
+  ///////////////////////// Resettare Arduino alla mezzanotte e un minuto /////////////////
+  // Ho dovuto inserire <now.second() ==1 || now.second() ==2> per tener conto che il conteggio dei secondi è irregolare.
+
+  if ((now.hour() == 0) && (now.minute() == 1) && (now.second() == 1 || (now.second() == 2))) resetFunc();
+
+  //////// Spegnere la retroilluminazione del display tra le ore 0:5 e le ore 9  ///////////////
+  if ((now.hour() >= 8) || ((now.hour() <= 0 && (now.minute() <= 5)))) {
+    digitalWrite(3, HIGH);
+  } else {
+    digitalWrite(3, LOW);
+  }
+
+  ///////////// Accendere la retroilluminazione del display momentaneamente, usando il pulsante ///////////////
+  if (digitalRead(2) == LOW) {  // Se si preme il pulsante
+    digitalWrite(3, HIGH);      // Porta Alto il PIN 3 e quindi accende la retroilluminazione del display.
+  }
+
+  ///Pulire il dipslay, utilizzando il tempo impostato alla riga <TimedAction timedAction = TimedAction(240000, tftrefresh);>
+  timedAction.check();
+}
+///////////// Calcolo dell'Indice di calore, usando la formula di Steadman //////////////////////
+float calculateHeatIndex(float temp, float hummod) {
+  float T = temp;
+  float R = hum1;
+  float A = -8.78469475556;
+  float B = 1.61139411;
+  float C = 2.33854883889;
+  float D = -0.14611605;
+  float E = -0.012308094;
+  float F = -0.0164248277778;
+  float G = 0.002211732;
+  float H = 0.00072546;
+  float I = -0.000003582;
+  float heat_index = A + (B * T) + (C * R) + (D * T * R) + (E * T * T) + (F * R * R) + (G * T * T * R) + (H * T * R * R) + (I * T * T * R * R);
+  return heat_index;
+}
+
+//////////////////////////// Refresh del display ogni 4 minuti /////////////////
+void tftrefresh() {
+  tft.setCursor(0, 0);
+  tft.setTextSize(2);
+  tft.setTextColor(WHITE, BLACK);
+  tft.print("*****************************************************************************************************");
+  tft.print("*****************************************************************************************************");
+  tft.print("*****************************************************************************************************");
+  tft.print("*****************************************************************************************************");
+  tft.print("*****************************************************************************************************");
+  tft.setCursor(0, 0);
+  tft.setTextColor(BLACK, WHITE);
+  tft.print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&");
+  tft.print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&");
+  tft.print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&");
+  tft.print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&");
+  tft.print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&");
+  delay(300);
+  tft.fillScreen(BLACK);
+  delay(200);
+  tft.fillScreen(NAVY);
+  delay(200);
+}
+////////////////// scrivere data e ora sul seriale ///////////////////////
+void printTheTime(DateTime theTimeP) {
+  Serial.print(theTimeP.year(), DEC);
+  Serial.print('/');
+  Serial.print(theTimeP.month(), DEC);
+  Serial.print('/');
+  Serial.print(theTimeP.day(), DEC);
+  Serial.print(' ');
+  Serial.print(theTimeP.hour(), DEC);
+  Serial.print(':');
+  Serial.print(theTimeP.minute(), DEC);
+  Serial.print(':');
+  Serial.print(theTimeP.second(), DEC);
+  Serial.println();
+}
