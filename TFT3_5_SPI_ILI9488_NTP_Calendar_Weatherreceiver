@@ -1,0 +1,984 @@
+#include <BME280I2C.h>
+#include <SPI.h>
+#include <Wire.h>
+#include "TFT_eSPI.h"
+#include <NTPClient.h>
+#include <ESP8266WiFi.h>
+#include <WiFiUdp.h>
+#include <Timezone.h>
+#include <ArduinoJson.h>
+#include <ArduinoOTA.h>
+
+
+// ---------------------------------------------------------------------------
+// LANGUAGE SELECTION
+// ---------------------------------------------------------------------------
+// Define an enum for supported languages
+enum Language { LANG_IT,
+                LANG_EN,
+                LANG_FR,
+                LANG_ES,
+                LANG_DE };
+///////////////////////////////////////////////////////////////////               
+// Set the language to use (change this constant as needed) ///////
+Language selectedLanguage = LANG_IT; // For example: LANG_IT, LANG_EN, LANG_FR, LANG_ES
+
+// ---------------------------------------------------------------------------
+// GLOBAL DISPLAY TEXT VARIABLES (used both for Serial and TFT display)
+// ---------------------------------------------------------------------------
+const char* MSG_SENSOR_NOT_FOUND;
+const char* MSG_SENSOR_INITIALIZED;
+const char* MSG_WIFI_CONNECTING;
+const char* MSG_WIFI_CONNECTED;
+const char* MSG_TIME_SYNC_IN_PROGRESS;
+const char* MSG_TIME_SYNC_COMPLETED;
+const char* MSG_TIME_SYNC_FAILED;
+const char* MSG_WEATHER_STATION;
+const char* MSG_MADE_BY;
+const char* MSG_HEAT_INDEX;   // Label for heat index
+const char* MSG_HOURS;        // e.g., "Ore" or "Hours"
+const char* MSG_MINUTES;      // e.g., "Minuti" or "Minutes"
+const char* MSG_TEMPERATURE;  // e.g., "Temperatura" or "Temperature"
+const char* MSG_HUMIDITY;     // e.g., "Umidita R. %" or "Humidity %"
+const char* MSG_IN_CASA;      // e.g., "IN CASA" or "AT HOME"
+const char* MSG_FILE;         // e.g., "file:" or "file:"
+
+
+
+
+// ---------------------------------------------------------------------------
+// ARRAYS FOR DAYS AND MONTHS (will be assigned per language)
+// ---------------------------------------------------------------------------
+// First, define static arrays for each language.
+static const char* daysOfTheWeek_IT[7] = { "Domenica", "Lunedi", "Martedi", "Mercoledi", "Giovedi", "Venerdi", "Sabato" };
+static const char* monthsOfTheYear_IT[12] = { "Gennaio", "Febbraio", "Marzo", "Aprile", "Maggio", "Giugno", "Luglio", "Agosto", "Settembre", "Ottobre", "Novembre", "Dicembre" };
+
+static const char* daysOfTheWeek_EN[7] = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+static const char* monthsOfTheYear_EN[12] = { "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" };
+
+static const char* daysOfTheWeek_FR[7] = { "Dimanche", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi" };
+static const char* monthsOfTheYear_FR[12] = { "Janvier", "Fevrier", "Mars", "Avril", "Mai", "Juin", "Juillet", "Aout", "Septembre", "Octobre", "Novembre", "Décembre" };
+
+static const char* daysOfTheWeek_ES[7] = { "Domingo", "Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado" };
+static const char* monthsOfTheYear_ES[12] = { "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre" };
+
+static const char* daysOfTheWeek_DE[7] = { "Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag" };
+static const char* monthsOfTheYear_DE[12] = { "Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember" };
+
+// Global pointers that will point to the chosen arrays:
+const char** daysOfTheWeek;
+const char** monthsOfTheYear;
+
+// ---------------------------------------------------------------------------
+// SET LANGUAGE STRINGS BASED ON USER SELECTION
+// ---------------------------------------------------------------------------
+void setLanguage(Language lang) {
+  switch (lang) {
+    case LANG_IT:
+      MSG_SENSOR_NOT_FOUND = "Non trovo il sensore BME280!";
+      MSG_SENSOR_INITIALIZED = "BME280 inizializzato correttamente!";
+      MSG_WIFI_CONNECTING = "Connessione a WiFi...";
+      MSG_WIFI_CONNECTED = "Connesso a WiFi";
+      MSG_TIME_SYNC_IN_PROGRESS = "Sincronizzazione orario in corso...";
+      MSG_TIME_SYNC_COMPLETED = "Sincronizzazione oraria completata!";
+      MSG_TIME_SYNC_FAILED = "Sincronizzazione oraria fallita!";
+      MSG_WEATHER_STATION = "Stazione Meteo";
+      MSG_MADE_BY = "Fatto da";
+      MSG_HEAT_INDEX = "Indice di calore";
+      MSG_HOURS = "Ore";
+      MSG_MINUTES = "Minuti";
+      MSG_TEMPERATURE = "Temperatura";
+      MSG_HUMIDITY = "Umidita R. %";
+      MSG_IN_CASA = "IN CASA";
+      MSG_FILE = "file:";
+      daysOfTheWeek = daysOfTheWeek_IT;
+      monthsOfTheYear = monthsOfTheYear_IT;
+      break;
+    case LANG_EN:
+      MSG_SENSOR_NOT_FOUND = "BME280 sensor not found!";
+      MSG_SENSOR_INITIALIZED = "BME280 sensor initialized correctly!";
+      MSG_WIFI_CONNECTING = "Connecting to WiFi...";
+      MSG_WIFI_CONNECTED = "Connected to WiFi";
+      MSG_TIME_SYNC_IN_PROGRESS = "Synchronizing time...";
+      MSG_TIME_SYNC_COMPLETED = "Time synchronization complete!";
+      MSG_TIME_SYNC_FAILED = "Time synchronization failed!";
+      MSG_WEATHER_STATION = "Weather Station";
+      MSG_MADE_BY = "Made by";
+      MSG_HEAT_INDEX = "Heat Index";
+      MSG_HOURS = "Hours";
+      MSG_MINUTES = "Minutes";
+      MSG_TEMPERATURE = "Temperature";
+      MSG_HUMIDITY = "Humidity %";
+      MSG_IN_CASA = "AT HOME";
+      MSG_FILE = "file:";
+      daysOfTheWeek = daysOfTheWeek_EN;
+      monthsOfTheYear = monthsOfTheYear_EN;
+      break;
+    case LANG_FR:
+      MSG_SENSOR_NOT_FOUND = "Capteur BME280 introuvable!";
+      MSG_SENSOR_INITIALIZED = "Capteur BME280 initialisé correctement!";
+      MSG_WIFI_CONNECTING = "Connexion au WiFi...";
+      MSG_WIFI_CONNECTED = "WiFi connecté";
+      MSG_TIME_SYNC_IN_PROGRESS = "Synchronisation de l'heure en cours...";
+      MSG_TIME_SYNC_COMPLETED = "Synchronisation de l'heure terminée!";
+      MSG_TIME_SYNC_FAILED = "Échec de la synchronisation de l'heure!";
+      MSG_WEATHER_STATION = "Station Meteo";
+      MSG_MADE_BY = "Cree par";
+      MSG_HEAT_INDEX = "Indice de chaleur";
+      MSG_HOURS = "Heures";
+      MSG_MINUTES = "Minutes";
+      MSG_TEMPERATURE = "Temperature";
+      MSG_HUMIDITY = "Humidite %";
+      MSG_IN_CASA = "A LA MAISON";
+      MSG_FILE = "fichier:";
+      daysOfTheWeek = daysOfTheWeek_FR;
+      monthsOfTheYear = monthsOfTheYear_FR;
+      break;
+    case LANG_ES:
+      MSG_SENSOR_NOT_FOUND = "Sensor BME280 no encontrado!";
+      MSG_SENSOR_INITIALIZED = "Sensor BME280 inicializado correctamente!";
+      MSG_WIFI_CONNECTING = "Conectando a WiFi...";
+      MSG_WIFI_CONNECTED = "WiFi conectado";
+      MSG_TIME_SYNC_IN_PROGRESS = "Sincronizando hora...";
+      MSG_TIME_SYNC_COMPLETED = "¡Sincronizacion completada!";
+      MSG_TIME_SYNC_FAILED = "¡Sincronizacion fallida!";
+      MSG_WEATHER_STATION = "Estación Meteorológica";
+      MSG_MADE_BY = "Hecho por";
+      MSG_HEAT_INDEX = "Indice de calor";
+      MSG_HOURS = "Horas";
+      MSG_MINUTES = "Minutos";
+      MSG_TEMPERATURE = "Temperatura";
+      MSG_HUMIDITY = "Humedad %";
+      MSG_IN_CASA = "EN CASA";
+      MSG_FILE = "archivo:";
+      daysOfTheWeek = daysOfTheWeek_ES;
+      monthsOfTheYear = monthsOfTheYear_ES;
+      break;
+      case LANG_DE:
+      MSG_SENSOR_NOT_FOUND = "Ich kann den BME280-Sensor nicht finden!";
+      MSG_SENSOR_INITIALIZED = "BME280 erfolgreich initialisiert!";
+      MSG_WIFI_CONNECTING = "Mit WLAN verbinden...";
+      MSG_WIFI_CONNECTED = "Mit WLAN verbunden";
+      MSG_TIME_SYNC_IN_PROGRESS = "Zeitsynchronisation läuft...";
+      MSG_TIME_SYNC_COMPLETED = "Zeitsynchronisation abgeschlossen!";
+      MSG_TIME_SYNC_FAILED = "Zeitsynchronisierung fehlgeschlagen!";
+      MSG_WEATHER_STATION = "Wetterstation";
+      MSG_MADE_BY = "Hergestellt von";
+      MSG_HEAT_INDEX = "Hitzeindex";
+      MSG_HOURS = "Stunden";
+      MSG_MINUTES = "Minuten";
+      MSG_TEMPERATURE = "Temperatur";
+      MSG_HUMIDITY = "Luftfeuchte %";
+      MSG_IN_CASA = "Zu Hause";
+      MSG_FILE = "File:";
+      daysOfTheWeek = daysOfTheWeek_DE;
+      monthsOfTheYear = monthsOfTheYear_DE;
+      break;
+  }
+}
+// ---------------------------------------------------------------------------
+// BASIC CONFIGURATION
+// ---------------------------------------------------------------------------
+const char* ssid = "*************";
+const char* password =  "*************";
+const char* server = "api.thingspeak.com";
+const char* apiKey =  "*************"; // Parco baden Powell
+const char* channelId =  "*************";        // Parco baden Powell
+const char* tempField = "field1";
+const char* humField = "field2";
+const char* pressField = "field3";
+
+// ---------------------------------------------------------------------------
+// OBJECTS FOR DISPLAYS AND SENSORS
+// ---------------------------------------------------------------------------
+TFT_eSPI tft = TFT_eSPI();
+BME280I2C bme;
+
+// ---------------------------------------------------------------------------
+// TIME AND DATE CONFIGURATION
+// ---------------------------------------------------------------------------
+const long utcOffsetInSeconds = 0;
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", utcOffsetInSeconds);
+TimeChangeRule CEST = { "CEST", Last, Sun, Mar, 2, 120 };
+TimeChangeRule CET = { "CET", Last, Sun, Oct, 3, 60 };
+Timezone Rome(CEST, CET);
+// (The arrays “daysOfTheWeek” and “monthsOfTheYear” will be assigned in setLanguage())
+
+// ---------------------------------------------------------------------------
+// TIME VARIABLES AND INTERVALS
+// ---------------------------------------------------------------------------
+unsigned long previousMillis = 0;                // For non-blocking 1-sec operations
+unsigned long previousMillisThingSpeak = 0;      // For Thingspeak
+unsigned long previousDisplayRefreshMillis = 0;  // For refresh display
+
+unsigned long previousSensorRefreshMillis = 0;  // For sensor refresh
+const long sensorRefreshInterval = 2 * 1000;    // 2 seconds
+
+const long refreshInterval = 10 * 60 * 1000;       // Complete display refresh (10 min)
+const long thingSpeakInterval = 1.84 * 60 * 1000;  // Thingspeak interval (~1.84 min)
+
+// Countdown for display refresh
+const int COUNTDOWN_MINUTES = 10;
+const int COUNTDOWN_START = COUNTDOWN_MINUTES * 60;  // in seconds
+int countdown = COUNTDOWN_START;
+
+// ---------------------------------------------------------------------------
+// FACILITIES FOR DAILY EXTREMES
+// ---------------------------------------------------------------------------
+struct DailyExtremes {
+  float tmin = 100;
+  float tmax = -100;
+  float hmin = 100;
+  float hmax = 0;
+  float pmin = 2000;
+  float pmax = 0;
+};
+
+DailyExtremes localExtremes;  // Local sensor data
+DailyExtremes tsExtremes;     // Thingspeak data
+
+// ---------------------------------------------------------------------------
+// SENSOR DATA VARIABLES
+// ---------------------------------------------------------------------------
+float local_temp = 0, local_hum = 0;
+float ts_temp = 0, ts_hum = 0, ts_press = 0;
+bool pressureDataValid = false;
+
+float filteredHumidity = 0.0;       // Exponential filter variable for humidity
+const float HUMIDITY_ALPHA = 0.08;  // Smoothing factor
+
+// ---------------------------------------------------------------------------
+// REGULATION CONSTANTS (customizable)
+// ---------------------------------------------------------------------------
+const float altitudepws = 37;
+const float adjustment = 9;     // humidity adjustment
+const float adjustment1 = 1;  // temperature adjustment
+
+// ---------------------------------------------------------------------------
+// COLORS (defined for TFT display)
+// ---------------------------------------------------------------------------
+#define TFT_BLACK 0x0000
+#define TFT_NAVY 0x000F
+#define TFT_DARKGREEN 0x03E0
+#define TFT_DARKCYAN 0x03EF
+#define TFT_MAROON 0x7800
+#define TFT_PURPLE 0x780F
+#define TFT_OLIVE 0x7BE0
+//#define TFT_LIGHTGREY 0xC618
+#define TFT_LIGHTGREY 0xD69A
+#define TFT_DARKGREY 0x7BEF
+#define TFT_BLUE 0x001F
+#define TFT_GREEN 0x07E0
+#define TFT_CYAN 0x07FF
+#define TFT_RED 0xF800
+#define TFT_MAGENTA 0xF81F
+#define TFT_YELLOW 0xFFE0
+#define TFT_WHITE 0xFFFF
+#define TFT_ORANGE 0xFDA0
+#define TFT_GREENYELLOW 0xB7E0
+//#define TFT_PINK 0xFC9F
+#define TFT_PINK 0xFE19
+#define TFT_SKYBLUE 0x867D
+#define TFT_VIOLET 0x915C
+#define TFT_GOLD 0xFEA0
+#define TFT_SILVER 0xC618
+#define TFT_BROWN 0x9A60
+
+// ---------------------------------------------------------------------------
+// PIN AND RESET FUNCTION
+// ---------------------------------------------------------------------------
+const int pinD0 = 16;
+void (*resetFunc)(void) = 0;  // Function for hardware reset
+void drawSoftCloud(int x, int y, uint16_t color);  // Function declaration
+void drawLittleSun(int x, int y, uint16_t color);
+void drawSunIcon(int x, int y, uint16_t color);
+void drawSlashedSunIcon(int x, int y, uint16_t color);
+
+// ---------------------------------------------------------------------------
+// STATE VARIABLES
+// ---------------------------------------------------------------------------
+bool initialDataFetched = false;
+bool lastDSTState = false;
+bool initialTimeSynced = false;
+bool firstRunDstIcon = true;
+bool colonState = true;  // Colon state for time display
+
+// --------------------------------------------------------------------
+// ICONS
+// --------------------------------------------------------------------
+void drawLittleSun(int x, int y) {
+  tft.fillCircle(x, y, 15, TFT_YELLOW);
+  for (int angle = 0; angle < 360; angle += 45) {
+    int xEnd = x + cos(radians(angle)) * 19;
+    int yEnd = y + sin(radians(angle)) * 16;
+    tft.drawLine(x, y, xEnd, yEnd, TFT_YELLOW);
+  }
+}
+
+void drawSoftCloud(int x, int y, uint16_t color) {
+  tft.fillCircle(x + 10, y + 12, 10, color);
+  tft.fillCircle(x + 21, y + 10, 11, color);
+  tft.fillCircle(x + 32, y + 12, 10, color);
+  tft.fillCircle(x + 27, y + 20, 9, color);
+  tft.fillCircle(x + 15, y + 20, 10, color);
+  tft.fillRect(x + 10, y + 12, 24, 10, color);
+}
+
+void drawSunIcon(int x, int y) {
+  // Define the center of the sun (same as original)
+  int cx = x + 7;
+  int cy = y + 7;
+  uint16_t sunColor = TFT_YELLOW;
+
+  // Draw the central circle.
+  tft.fillCircle(cx, cy, 6, sunColor);
+
+  // Vertical rays (extend 3 pixels further):
+  tft.drawLine(cx, cy - 9, cx, cy - 6, sunColor);
+  tft.drawLine(cx, cy + 6, cx, cy + 9, sunColor);
+
+  // Horizontal rays:
+  tft.drawLine(cx - 9, cy, cx - 6, cy, sunColor);
+  tft.drawLine(cx + 6, cy, cx + 9, cy, sunColor);
+
+  // Diagonal rays:
+  tft.drawLine(cx - 7, cy - 7, cx - 5, cy - 5, sunColor);
+  tft.drawLine(cx + 5, cy - 7, cx + 7, cy - 5, sunColor);
+  tft.drawLine(cx - 7, cy + 5, cx - 5, cy + 7, sunColor);
+  tft.drawLine(cx + 5, cy + 5, cx + 7, cy + 7, sunColor);
+}
+
+void drawSlashedSunIcon(int x, int y) {
+  // First, draw the enlarged sun icon
+  drawSunIcon(x, y);
+  // Compute the center again
+  int cx = x + 7;
+  int cy = y + 7;
+  uint16_t slashColor = TFT_RED;
+  tft.drawLine(cx - 8, cy - 8, cx + 8, cy + 8, slashColor);
+  tft.drawLine(cx - 9, cy - 8, cx + 7, cy + 8, slashColor);
+  tft.drawLine(cx - 8, cy - 9, cx + 8, cy + 7, slashColor);
+  // The small center accent lines:
+  tft.drawLine(cx, cy, cx + 4, cy - 4, slashColor);
+  tft.drawLine(cx, cy, cx - 4, cy + 4, slashColor);
+}
+
+// ===========================================================================
+// SETUP
+// ===========================================================================
+void setup() {
+  // Initialize Serial and Wire
+  Serial.begin(115200);
+  Wire.begin();
+   
+  // Set language strings based on the selection at the top.
+  setLanguage(selectedLanguage);
+
+  // BME280 sensor initialization
+  if (!bme.begin()) {
+    Serial.println(MSG_SENSOR_NOT_FOUND);
+    while (true) { delay(100); }
+  }
+  Serial.println(MSG_SENSOR_INITIALIZED);
+
+  // TFT display initialization
+  tft.begin();
+  tft.setRotation(1);
+
+  pinMode(pinD0, OUTPUT);
+  digitalWrite(pinD0, LOW);
+
+  // Splash screen graphic
+  tft.fillScreen(TFT_NAVY);
+  tft.setTextColor(TFT_WHITE, TFT_NAVY);
+  tft.setTextSize(3);
+  tft.setCursor(150, 90);
+  tft.print(MSG_WEATHER_STATION);
+  delay(5000);
+
+  // Show initial menu
+  showInitialMenu();
+
+  // Connect to WiFi and sync time
+  connectToWiFi();
+
+  // Setup OTA
+  setupOTA();
+}
+
+// ===========================================================================
+// MAIN LOOP
+// ===========================================================================
+void loop() {
+  tft.startWrite();  // Start TFT transaction
+  unsigned long currentMillis = millis();
+  ArduinoOTA.handle();
+  drawUIElements();
+
+  if (currentMillis - previousSensorRefreshMillis >= sensorRefreshInterval) {
+    previousSensorRefreshMillis = currentMillis;
+    refreshSensorDisplay();
+  }
+
+  handleThingSpeakDataFetch(currentMillis);
+  handleDisplayRefresh(currentMillis);
+  handleCountdown(currentMillis);
+  readAndDisplaySensorData();
+  handleTimeAndDateDisplay();
+  handleDailyReset();
+  handleDisplayBacklight();
+  readAndDisplaySensorData();
+  handleTimeAndDateDisplay();
+  float heat_index = calculateHeatIndex(ts_temp, ts_hum);
+  displayHeatIndex(heat_index);
+  tft.endWrite();    // End TFT transaction
+}
+
+// ===========================================================================
+// SETUP AND CONNECTION FUNCTIONS
+// ===========================================================================
+void connectToWiFi() {
+  tft.fillScreen(TFT_NAVY);
+  WiFi.begin(ssid, password);
+  Serial.println(MSG_WIFI_CONNECTING);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\n" + String(MSG_WIFI_CONNECTED));
+
+  timeClient.begin();
+  unsigned long syncStart = millis();
+  bool timeSynced = false;
+  while ((millis() - syncStart < 15000)) {
+    if (timeClient.update()) {
+      timeSynced = true;
+      break;
+    }
+    timeClient.forceUpdate();
+    delay(500);
+    Serial.println(MSG_TIME_SYNC_IN_PROGRESS);
+  }
+  if (timeSynced) {
+    initialTimeSynced = true;
+    Serial.println(MSG_TIME_SYNC_COMPLETED);
+  } else {
+    Serial.println(MSG_TIME_SYNC_FAILED);
+  }
+
+  tft.init();
+  tft.setRotation(1);
+  tft.fillScreen(TFT_BLACK);
+}
+
+void setupOTA() {
+  ArduinoOTA.setHostname("Orologio_NTP_Temp_Umid_Press");
+  ArduinoOTA.onStart([]() {
+    String type = (ArduinoOTA.getCommand() == U_FLASH) ? "sketch" : "filesystem";
+    Serial.println("Start updating " + type);
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nEnd OTA");
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+    else if (error == OTA_END_ERROR) Serial.println("End Failed");
+  });
+  ArduinoOTA.begin();
+  Serial.println("OTA Ready");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+}
+
+void showInitialMenu() {
+  tft.fillScreen(TFT_NAVY);
+  tft.setTextColor(TFT_WHITE, TFT_NAVY);
+  tft.setTextSize(3);
+  tft.setCursor(170, 100);
+  tft.print(MSG_MADE_BY);
+  tft.setCursor(13, 130);
+  tft.print("Peppino Lanni - 2023/2025");
+  tft.setCursor(29, 170);
+  tft.print("(NodeMCU8266 - ILI9488)");
+  tft.setTextSize(2);
+  tft.setCursor(195, 223);
+  tft.print(MSG_FILE);
+  tft.setCursor(20, 260);
+  // Extracts the source file name to write it to the splash screen.
+  const char* fullPath = __FILE__;
+  const char* filename = fullPath;
+  const char* lastSlash = strrchr(fullPath, '/');
+  if (!lastSlash) lastSlash = strrchr(fullPath, '\\');
+  if (lastSlash) filename = lastSlash + 1;
+  const char* dot = strrchr(filename, '.');
+  if (dot && strcmp(dot, ".ino") == 0) {
+    //char cleanName[50];
+    char cleanName[70];
+    size_t len = dot - filename;
+    if (len >= sizeof(cleanName)) len = sizeof(cleanName) - 1;
+    strncpy(cleanName, filename, len);
+    cleanName[len] = '\0';
+    tft.print(cleanName);
+  } else {
+    tft.print(filename);
+  }
+  delay(5000);
+}
+
+// ===========================================================================
+// FUNCTIONS FOR SENSOR DATA AND DISPLAY
+// ===========================================================================
+void readAndDisplaySensorData() {
+  float temp, hum, pres;
+  bme.read(pres, temp, hum);
+
+  local_temp = temp + adjustment1;
+  local_hum = hum + adjustment;
+
+  float rawHum = hum + adjustment;
+  if (filteredHumidity == 0.0) {
+    filteredHumidity = rawHum;
+  } else {
+    filteredHumidity = filteredHumidity + HUMIDITY_ALPHA * (rawHum - filteredHumidity);
+  }
+  local_hum = filteredHumidity;
+
+  if (local_temp < localExtremes.tmin) localExtremes.tmin = local_temp;
+  if (local_temp > localExtremes.tmax) localExtremes.tmax = local_temp;
+  if (local_hum < localExtremes.hmin) localExtremes.hmin = local_hum;
+  if (local_hum > localExtremes.hmax) localExtremes.hmax = local_hum;
+
+  displayPressure();
+  updateMinMaxValues();
+}
+
+void displayLargeTemperature(float temperature) {
+  tft.setTextSize(10);
+  tft.fillRect(32, 162, 166, 65, TFT_BLACK);
+  tft.setCursor(32, 168);
+  if (temperature < 17) {
+    tft.setTextColor(TFT_SKYBLUE, TFT_BLACK);
+  } else if (temperature < 24) {
+    tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  } else {
+    tft.setTextColor(TFT_RED, TFT_BLACK);
+  }
+  tft.print(String(temperature, 1));
+}
+
+void displayLargeHumidity(float humidity) {
+  tft.setTextSize(10);
+  tft.fillRect(283, 162, 176, 65, TFT_BLACK);
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+  tft.setCursor(285, 168);
+  tft.print(String(humidity, 1));
+}
+
+void displayPressure() {
+  tft.setTextSize(4);
+  tft.setCursor(5, 273);
+  tft.setTextColor(TFT_ORANGE, TFT_BLACK);
+  if (pressureDataValid) {
+    tft.print(String(ts_press, 1));
+  } else {
+    tft.print("--.-");
+  }
+  tft.setTextSize(2);
+  tft.setCursor(150, 280);
+  tft.print(" hPa");
+}
+
+void updateMinMaxValues() {
+  tft.setTextSize(2);
+  tft.setCursor(3, 232);
+  tft.setTextColor(TFT_SKYBLUE, TFT_BLACK);
+  tft.print("Min:");
+  tft.print(String(tsExtremes.tmin, 1));
+  tft.setCursor(122, 232);
+  tft.setTextColor(TFT_MAGENTA, TFT_BLACK);
+  tft.print("Max:");
+  tft.print(String(tsExtremes.tmax, 1));
+
+  tft.setCursor(252, 232);
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+  tft.print("Min:");
+  tft.print(String(tsExtremes.hmin, 1));
+  tft.setCursor(362, 232);
+  tft.setTextColor(TFT_MAGENTA, TFT_BLACK);
+  tft.print("Max:");
+  tft.print(String(tsExtremes.hmax, 1));
+
+  tft.setCursor(215, 265);
+  tft.setTextColor(TFT_CYAN, TFT_BLACK);
+  tft.print("Min:");
+  tft.print(String(tsExtremes.pmin, 1));
+  tft.setCursor(215, 290);
+  tft.setTextColor(TFT_MAGENTA, TFT_BLACK);
+  tft.print("Max:");
+  tft.print(String(tsExtremes.pmax, 1));
+}
+
+void displayHeatIndex(float heat_index) {
+  tft.setCursor(365, 264);
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  tft.print(MSG_HEAT_INDEX);
+  tft.setCursor(345, 280);
+  tft.setTextSize(4);
+  if (isnan(heat_index)) {
+    tft.print("    ");
+  } else {
+    tft.print(heat_index, 1);
+  }
+}
+
+void refreshSensorDisplay() {
+  float temp, hum, pres;
+  bme.read(pres, temp, hum);
+  local_temp = temp + adjustment1;
+  float rawHum = hum + adjustment;
+  filteredHumidity = (filteredHumidity == 0.0) ? rawHum : filteredHumidity + HUMIDITY_ALPHA * (rawHum - filteredHumidity);
+  local_hum = filteredHumidity;
+
+  // Define the box dimensions
+  int boxX = 230;
+  int boxY = 2;
+  int boxW = 246;
+  int margin = 5;  // Adjust this value as needed
+
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+
+  // Calculate horizontal center using textWidth()
+  int textW = tft.textWidth(MSG_IN_CASA);
+  int centerX = boxX + (boxW - textW) / 2;
+
+  // Set y-coordinate just under the upper border of the box
+  int textY = boxY + margin;
+
+  tft.setCursor(centerX, textY);
+  tft.print(MSG_IN_CASA);
+
+  tft.setTextSize(2);
+  tft.setCursor(260, 28);
+  tft.print("T. ");
+  tft.drawCircle(290, 30, 2, TFT_YELLOW);
+  tft.print("C");
+
+  tft.setCursor(243, 51);
+  tft.setTextSize(4);
+  tft.print(local_temp, 1);
+
+  tft.setTextSize(2);
+  tft.setCursor(384, 28);
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+  tft.print("RH. %");
+
+  tft.setCursor(367, 51);
+  tft.setTextSize(4);
+  tft.print(local_hum, 1);
+}
+
+// ===========================================================================
+// FUNCTIONS FOR THINGSPEAK DATA
+// ===========================================================================
+void fetchDataFromThingspeak() {
+  WiFiClient client;
+  if (client.connect(server, 80)) {
+    String url = "/channels/" + String(channelId) + "/feeds.json?api_key=" + String(apiKey) + "&results=1";
+    client.print(String("GET ") + url + " HTTP/1.1\r\n" + "Host: " + server + "\r\n" + "Connection: close\r\n\r\n");
+    unsigned long timeout = millis();
+    while (!client.available() && millis() - timeout < 5000) { delay(10); }
+    String response = client.readString();
+    int jsonStart = response.indexOf('{');
+    if (jsonStart >= 0) response = response.substring(jsonStart);
+    //DynamicJsonDocument doc(2048);
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, response);
+    if (!error) {
+      displayThingSpeakData(doc);
+      if (ts_temp < tsExtremes.tmin) tsExtremes.tmin = ts_temp;
+      if (ts_temp > tsExtremes.tmax) tsExtremes.tmax = ts_temp;
+      if (ts_hum < tsExtremes.hmin) tsExtremes.hmin = ts_hum;
+      if (ts_hum > tsExtremes.hmax) tsExtremes.hmax = ts_hum;
+      if (ts_press < tsExtremes.pmin) tsExtremes.pmin = ts_press;
+      if (ts_press > tsExtremes.pmax) tsExtremes.pmax = ts_press;
+    } else {
+      showErrorOnDisplay();
+    }
+  }
+}
+
+//void displayThingSpeakData(DynamicJsonDocument doc) {
+  void displayThingSpeakData(JsonDocument doc) {
+  if (!doc["feeds"].isNull() && doc["feeds"].size() > 0) {
+    JsonObject feed = doc["feeds"][0];
+    ts_temp = feed.containsKey(tempField) ? feed[tempField].as<float>() : NAN;
+    ts_hum = feed.containsKey(humField) ? feed[humField].as<float>() : NAN;
+    ts_press = feed.containsKey(pressField) ? feed[pressField].as<float>() : NAN;
+    if (ts_temp < -40 || ts_temp > 60) ts_temp = NAN;
+    if (ts_hum < 0 || ts_hum > 100) ts_hum = NAN;
+    if (ts_press < 300 || ts_press > 1100) ts_press = NAN;
+    pressureDataValid = !isnan(ts_press);
+  }
+  displayLargeTemperature(ts_temp);
+  displayLargeHumidity(ts_hum);
+}
+
+void showErrorOnDisplay() {
+  pressureDataValid = false;
+  tft.setCursor(249, 6);
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  tft.print("Parco Baden Powell");
+  tft.setTextSize(2);
+  tft.setCursor(260, 28);
+  tft.print("T. ");
+  tft.drawCircle(290, 30, 2, TFT_YELLOW);
+  tft.print("C");
+  tft.setCursor(235, 51);
+  tft.setTextSize(4);
+  tft.print("--.-");
+  tft.setTextSize(2);
+  tft.setCursor(384, 28);
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+  tft.print("RH. %");
+  tft.setCursor(360, 51);
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+  tft.setTextSize(4);
+  tft.print("--.-");
+}
+
+void handleThingSpeakDataFetch(unsigned long currentMillis) {
+  if (!initialDataFetched) {
+    fetchDataFromThingspeak();
+    initialDataFetched = true;
+  }
+  if (currentMillis - previousMillisThingSpeak >= thingSpeakInterval) {
+    previousMillisThingSpeak += thingSpeakInterval;
+    fetchDataFromThingspeak();
+  }
+}
+
+// ===========================================================================
+// FUNCTIONS FOR DISPLAY MANAGEMENT AND GRAPHICS
+// ===========================================================================
+void refreshDisplay() {
+  tft.fillScreen(TFT_BLACK);
+  firstRunDstIcon = true;
+  fetchDataFromThingspeak();
+}
+
+void handleDisplayRefresh(unsigned long currentMillis) {
+  if (currentMillis - previousDisplayRefreshMillis >= refreshInterval) {
+    previousDisplayRefreshMillis = currentMillis;
+    refreshDisplay();
+    countdown = COUNTDOWN_START;
+    handleCountdown(millis());  // Force immediate update
+  }
+}
+
+void handleCountdown(unsigned long currentMillis) {
+  static int lastWidth = -1;
+  static uint16_t lastColor = 0xFFFF;
+  static int lastMinute = -1;
+  if (currentMillis - previousMillis >= 900) {
+    previousMillis = currentMillis;
+    if (countdown > 0) countdown--;
+  }
+  int currentWidth = map(countdown, 0, COUNTDOWN_START, 0, 450);
+  uint16_t currentColor = TFT_GREEN;
+  if (countdown <= 360) currentColor = TFT_YELLOW;  // 6 min rimanenti
+  if (countdown <= 180) currentColor = TFT_RED;     // 3 min rimanenti
+  
+  // Corrected minute calculation
+  int currentMinute = (countdown > 0) ? ((countdown - 1) / 60) : 0;
+  currentMinute = constrain(currentMinute, 0, COUNTDOWN_MINUTES - 1);
+
+    // Optimized bar drawing with minimal updates
+  if (currentWidth != lastWidth || currentColor != lastColor) {
+    if (lastWidth != -1) {  // Skip first draw
+      if (currentColor == lastColor) {
+        // Only update changed portion
+        if (currentWidth < lastWidth) {
+          // Shrink bar - clear right side
+          tft.fillRect(currentWidth, 123, lastWidth - currentWidth, 8, TFT_BLACK);
+        } else if (currentWidth > lastWidth) {
+          // Grow bar (shouldn't happen normally)
+          tft.fillRect(lastWidth, 123, currentWidth - lastWidth, 8, currentColor);
+        }
+      } else {
+        // Color changed - redraw entire bar
+        tft.fillRect(0, 123, 450, 8, currentColor);
+        tft.fillRect(currentWidth, 123, 450 - currentWidth, 8, TFT_BLACK);
+      }
+    }
+    // Always draw current width to ensure accuracy
+    tft.fillRect(0, 123, currentWidth, 8, currentColor);
+    
+    lastWidth = currentWidth;
+    lastColor = currentColor;
+  }
+
+  // Minute display update
+  if (currentMinute != lastMinute) {
+    tft.fillCircle(467, 130, 11, TFT_RED);
+    tft.setCursor(463, 123);
+    tft.setTextSize(2);
+    tft.setTextColor(TFT_YELLOW, TFT_RED);
+    tft.printf("%d", currentMinute);
+    lastMinute = currentMinute;
+  }
+}
+
+void handleTimeAndDateDisplay() {
+  if (!initialTimeSynced) return;
+  timeClient.update();
+  time_t rawTime = timeClient.getEpochTime();
+  time_t localTime = Rome.toLocal(rawTime);
+   // DST icon management (update only if necessary)
+  bool isDST = (Rome.toLocal(rawTime) - rawTime) == 7200;
+  if (firstRunDstIcon || isDST != lastDSTState) {
+    tft.fillRect(0, 25, 14, 14, TFT_BLACK);
+    if (isDST) {
+      // drawSunIcon(0, 25);
+      drawSlashedSunIcon(0, 25);
+    } else {
+      // drawSlashedSunIcon(0, 25);
+      drawSunIcon(0, 25);
+    }
+    lastDSTState = isDST;
+    firstRunDstIcon = false;
+  }
+  struct tm* ptm = localtime(&localTime);
+  displayTime(ptm);
+  displayDate(ptm);
+}
+
+void displayTime(struct tm* ptm) {
+  bool colonState = (ptm->tm_sec % 2 == 0);
+  //bool colonState = (ptm->tm_sec % 2 == 0) / 2;
+  char timeStr[6];
+  int hour = (ptm->tm_hour + 24) % 24;
+  if (hour < 10) {
+    sprintf(timeStr, " %d%c%02d", hour, colonState ? ':' : ' ', ptm->tm_min);
+  } else {
+    sprintf(timeStr, "%02d%c%02d", hour, colonState ? ':' : ' ', ptm->tm_min);
+  }
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(8);
+  tft.setCursor(15, 30);
+  tft.print(timeStr);
+}
+
+void displayDate(struct tm* ptm) {
+  tft.setCursor(10, 94);
+  tft.setTextSize(3);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.print(daysOfTheWeek[ptm->tm_wday]);
+  tft.print(" ");
+  tft.print(ptm->tm_mday);
+  tft.print(" ");
+  tft.print(monthsOfTheYear[ptm->tm_mon]);
+  tft.print(" ");
+  tft.print(ptm->tm_year + 1900);
+}
+
+void handleDisplayBacklight() {
+  timeClient.update();
+  time_t rawTime = timeClient.getEpochTime();
+  time_t localTime = Rome.toLocal(rawTime);
+  struct tm* ptm = localtime(&localTime);
+  if ((ptm->tm_hour == 23) && (ptm->tm_min == 59) && (ptm->tm_sec == 50 || ptm->tm_sec == 51)) {
+    resetFunc();
+  }
+  if ((ptm->tm_hour == 0) && (ptm->tm_min == 3)) {
+    digitalWrite(pinD0, HIGH);
+  }
+  if ((ptm->tm_hour == 6) && (ptm->tm_min == 30)) {
+    digitalWrite(pinD0, LOW);
+  }
+}
+
+void drawUIElements() {
+  tft.drawLine(0, 313, 480, 313, TFT_WHITE);
+  tft.drawLine(0, 138, 458, 138, TFT_WHITE);
+  tft.drawRoundRect(230, 2, 246, 85, 8, TFT_GOLD);
+  tft.drawLine(350, 25, 350, 85, TFT_WHITE);
+  tft.drawLine(0, 258, 480, 258, TFT_WHITE);
+  tft.drawLine(0, 260, 480, 260, TFT_WHITE);
+  tft.drawLine(344, 260, 344, 310, TFT_ORANGE);
+  tft.drawRoundRect(0, 2, 41, 13, 3, TFT_GOLD);
+  tft.setCursor(2, 4);
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_BLUE, TFT_WHITE);
+  tft.print("P.L.23");
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setCursor(53, 0);
+  tft.setTextSize(1);
+  tft.print(MSG_HOURS);  // Use MSG_HOURS if desired (or you can leave as is)
+  tft.setCursor(160, 0);
+  tft.print(MSG_MINUTES);
+  tft.setTextColor(TFT_ORANGE, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setCursor(35, 143);
+  tft.print(MSG_TEMPERATURE + String(" "));  // Append a space if needed
+  tft.drawCircle(176, 145, 2, TFT_ORANGE);
+  tft.print("C");
+  tft.setCursor(288, 143);
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+  tft.print(MSG_HUMIDITY);
+  drawLittleSun(230, 160);
+  drawSoftCloud(200, 160, TFT_LIGHTGREY);
+}
+
+// ===========================================================================
+// DAILY EXTREME RESET
+// ===========================================================================
+void handleDailyReset() {
+  timeClient.update();
+  time_t rawTime = timeClient.getEpochTime();
+  time_t localTime = Rome.toLocal(rawTime);
+  struct tm* ptm = localtime(&localTime);
+  if (ptm->tm_hour == 23 && ptm->tm_min == 59 && ptm->tm_sec == 59) {
+    resetDailyExtremes();
+  }
+}
+
+void resetDailyExtremes() {
+  localExtremes.tmin = 100;
+  localExtremes.tmax = -100;
+  localExtremes.hmin = 100;
+  localExtremes.hmax = 0;
+  localExtremes.pmin = 2000;
+  localExtremes.pmax = 0;
+  tsExtremes.tmin = 100;
+  tsExtremes.tmax = -100;
+  tsExtremes.hmin = 100;
+  tsExtremes.hmax = 0;
+  tsExtremes.pmin = 2000;
+  tsExtremes.pmax = 0;
+}
+
+// ===========================================================================
+// HEAT INDEX CALCULATION
+// ===========================================================================
+float calculateHeatIndex(float temp, float hum) {
+  if (isnan(temp) || isnan(hum) || temp < 26.7 || hum < 40) {
+    return NAN;
+  }
+  float Tf = temp * 1.8 + 32;
+  float c1 = -42.379, c2 = 2.04901523, c3 = 10.14333127;
+  float c4 = -0.22475541, c5 = -0.00683783, c6 = -0.05481717;
+  float c7 = 0.00122874, c8 = 0.00085282, c9 = -0.00000199;
+  float heatIndexF = c1 + c2 * Tf + c3 * hum + c4 * Tf * hum + c5 * pow(Tf, 2) + c6 * pow(hum, 2) + c7 * pow(Tf, 2) * hum + c8 * Tf * pow(hum, 2) + c9 * pow(Tf, 2) * pow(hum, 2);
+  return (heatIndexF - 32) * 5.0 / 9.0;
+}
